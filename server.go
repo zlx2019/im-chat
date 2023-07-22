@@ -6,6 +6,7 @@ import (
 	"net"
 	"runtime"
 	"sync"
+	"time"
 )
 
 // 服务端
@@ -77,6 +78,24 @@ func (s *Server) Handler(conn net.Conn) {
 	// 用户上线
 	user.Online()
 	log.Println("当前协程数量: ", runtime.NumGoroutine())
+
+	for {
+		select {
+		case <-user.Active:
+			// 接收心跳信号
+		case <-time.After(time.Second * 10):
+			// 一旦用户超过10秒没有收到心跳信号,超时强制下线
+			user.conn.Write([]byte("已超时,您被强制下线了~"))
+			s.Pushlish(OfMessage(user, "已超时,强制下线~", Admin))
+			// 用户下线
+			user.Downline()
+			// 退出当前协程
+			return
+		case <-user.StopCtx.Done():
+			return
+		}
+	}
+
 }
 
 // 将消息推送给广播器
@@ -93,6 +112,11 @@ func (s *Server) Listener() {
 			return
 		}
 
+		// 系统消息
+		if m.Type == Admin {
+			log.Printf("[%s] %s", m.User.Name, m.Payload)
+		}
+
 		// 广播消息
 		for _, u := range s.OnlineUsers {
 			if m.Type == Public {
@@ -104,9 +128,6 @@ func (s *Server) Listener() {
 			} else if m.Type == Private {
 				// 私信消息
 				// TODO
-			} else if m.Type == Admin {
-				// 系统消息
-				log.Println(m.Payload)
 			}
 		}
 	}

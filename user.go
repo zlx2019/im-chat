@@ -22,6 +22,8 @@ type User struct {
 	StopCtx context.Context
 	// 结束会话触发方法
 	StopCancel context.CancelFunc
+	// 心跳活跃信号
+	Active chan struct{}
 	// 用户的客户端连接
 	conn net.Conn
 	// 服务端
@@ -43,6 +45,7 @@ func NewUser(conn net.Conn, s *Server) *User {
 		StopCtx:    stop,
 		StopCancel: canl,
 		server:     s,
+		Active:     make(chan struct{}),
 	}
 }
 
@@ -56,9 +59,10 @@ func (u *User) Writer() {
 			// 写回客户端
 			u.conn.Write([]byte(msg + "\r\n"))
 		case <-u.StopCtx.Done():
-			// 客户端关闭
-			log.Println(u.Name + " 下线了~")
-			log.Println("当前协程数量: ", runtime.NumGoroutine())
+			// 接收到Reader协程 停止信号,关闭本协程
+			// 关闭用户的消息通道
+			close(u.Ch)
+			log.Println("当前协程数量: ", runtime.NumGoroutine()-1)
 			return
 		}
 	}
@@ -69,13 +73,15 @@ func (u *User) Writer() {
 func (u *User) Reader() {
 	buf := make([]byte, 1024)
 	for {
+		// 读取消息
 		n, err := u.conn.Read(buf)
-		// 读取数据错误
 		if err != nil {
-			// 用户客户端关闭
 			if err == io.EOF {
-				// 用户下线
+				// 客户端主动关闭,用户下线
 				u.Downline()
+				return
+			} else if opErr, ok := err.(*net.OpError); ok && opErr.Err.Error() == "use of closed network connection" {
+				// conn已被close,可能已经超时强制退出.直接结束该协程
 				return
 			}
 			log.Println("client read error:", err)
@@ -95,6 +101,8 @@ func (u *User) Reader() {
 			// 将消息转发给服务端
 			u.server.Pushlish(OfMessage(u, message, Public))
 		}
+		// 发送心跳信号,保持活跃 否则会超时
+		u.Active <- struct{}{}
 	}
 }
 
@@ -107,6 +115,7 @@ func (u *User) Online() {
 	u.server.Lock.Unlock()
 	// 广播上线消息
 	u.server.Pushlish(OfMessage(u, "上线辣~", Public))
+	u.server.Pushlish(OfMessage(u, "上线了~", Admin))
 	// 开启一个协程 读取服务端消息,并且写回客户端
 	go u.Writer()
 	// 开启一个协程 读取客户端消息,发送给服务端广播器
@@ -117,15 +126,19 @@ func (u *User) Online() {
 // user out close resources
 // 用户下线,释放用户相关资源
 func (u *User) Downline() {
-	// 从服务器在线列表中移除
+	//1. 从服务器在线列表中移除
 	u.server.Lock.Lock()
 	delete(u.server.OnlineUsers, u.Name)
 	u.server.Lock.Unlock()
-	// 停止用户循环写的协程
-	u.StopCancel()
-	// 广播下线消息
-	u.server.Pushlish(OfMessage(u, "下线辣~", Public))
 
+	//2. 通过上下文结束用户Writer任务协程
+	u.StopCancel()
+
+	//3. 广播下线消息
+	u.server.Pushlish(OfMessage(u, "下线辣~", Public))
+	u.server.Pushlish(OfMessage(u, "下线了~", Admin))
+	//4. 关闭客户端连接
+	u.conn.Close()
 }
 
 // find all online users
