@@ -65,33 +65,27 @@ func (s *Server) Run() {
 		}
 		// do handler
 		// 处理客户端连接 用户上线
-		go s.Online(conn)
+		go s.Handler(conn)
 	}
 }
 
 // 处理客户端连接,用户上线
-func (s *Server) Online(conn net.Conn) {
-	log.Printf("client conn in addr: %s \n", conn.LocalAddr().String())
+func (s *Server) Handler(conn net.Conn) {
+	// log.Printf("client conn in addr: %s \n", conn.LocalAddr().String())
 	// 创建用户
-	user := NewUser(conn)
-	// 添加至在线用户列表
-	s.Lock.Lock()
-	s.OnlineUsers[user.Name] = user
-	s.Lock.Unlock()
-	onlineMsg := user.Addr + " 上线辣~"
-	// 广播用户上线消息
-	s.Pushlish(user, onlineMsg)
-	// 开启一个协程 读取服务端消息,并且写回客户端
-	go user.Writer()
-	// 开启一个协程 读取客户端消息,发送给服务端广播器
-	go user.Reader(s)
-	log.Println(onlineMsg)
+	user := NewUser(conn, s)
+	// 用户上线
+	user.Online()
 	log.Println("当前协程数量: ", runtime.NumGoroutine())
 }
 
 // 将消息推送给广播器
 func (s *Server) Pushlish(user *User, msg string) {
-	s.Publisher <- fmt.Sprintf("[%s]: %s", user.Name, msg)
+	if user == nil {
+		s.Publisher <- msg
+	} else {
+		s.Publisher <- fmt.Sprintf("[%s]: %s", user.Name, msg)
+	}
 }
 
 // 消息监听,并且广播给所有在线用户
@@ -103,10 +97,10 @@ func (s *Server) Listener() {
 			return
 		}
 		// 广播消息
-		s.Lock.RLock()
+		// s.Lock.RLock()
 		for _, u := range s.OnlineUsers {
 			u.Ch <- message
 		}
-		s.Lock.RUnlock()
+		// s.Lock.RUnlock()
 	}
 }
