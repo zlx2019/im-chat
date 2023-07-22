@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"runtime"
+	"strings"
 )
 
 // 用户信息
@@ -56,7 +57,7 @@ func (u *User) Writer() {
 			u.conn.Write([]byte(msg + "\r\n"))
 		case <-u.StopCtx.Done():
 			// 客户端关闭
-			// log.Println(u.Name + " 下线了~")
+			log.Println(u.Name + " 下线了~")
 			log.Println("当前协程数量: ", runtime.NumGoroutine())
 			return
 		}
@@ -82,7 +83,18 @@ func (u *User) Reader() {
 		}
 		// 读取数据成功(去除 '\n')
 		message := string(buf[:n-1])
-		u.server.Pushlish(u, message)
+		// 是否是操作命令
+		if message == "ls" {
+			// 查看所有在线用户
+			message = u.OnlineUsers()
+			u.Ch <- message
+		} else if len(message) > 7 && message[:7] == "rename " {
+			// 重命名
+			u.Rename(message[7:])
+		} else {
+			// 将消息转发给服务端
+			u.server.Pushlish(OfMessage(u, message, Public))
+		}
 	}
 }
 
@@ -94,8 +106,7 @@ func (u *User) Online() {
 	u.server.OnlineUsers[u.Name] = u
 	u.server.Lock.Unlock()
 	// 广播上线消息
-	onlineMsg := u.Addr + " 上线辣~"
-	u.server.Pushlish(nil, onlineMsg)
+	u.server.Pushlish(OfMessage(u, "上线辣~", Public))
 	// 开启一个协程 读取服务端消息,并且写回客户端
 	go u.Writer()
 	// 开启一个协程 读取客户端消息,发送给服务端广播器
@@ -113,8 +124,43 @@ func (u *User) Downline() {
 	// 停止用户循环写的协程
 	u.StopCancel()
 	// 广播下线消息
-	shutdownMsg := fmt.Sprintf("%s下线了~", u.Name)
-	u.server.Pushlish(nil, shutdownMsg)
-	log.Println(shutdownMsg)
+	u.server.Pushlish(OfMessage(u, "下线辣~", Public))
 
+}
+
+// find all online users
+// 查询所有在线用户信息(排除自己)
+func (u *User) OnlineUsers() string {
+	names := []string{}
+	u.server.Lock.Lock()
+	for k := range u.server.OnlineUsers {
+		if k != u.Name {
+			names = append(names, fmt.Sprintf("[%s]", k))
+		}
+	}
+	title := "当前在线用户如下: \n"
+	u.server.Lock.Unlock()
+	switch len(names) {
+	case 0:
+		return "暂无任何在线用户~"
+	case 1:
+		return title + names[0]
+	default:
+		return title + strings.Join(names, "\n")
+	}
+}
+
+// rename
+// 用户重命名
+func (u *User) Rename(newName string) {
+	u.server.Lock.Lock()
+	defer u.server.Lock.Unlock()
+	// 判断名称是否已存在
+	if _, ok := u.server.OnlineUsers[newName]; ok {
+		u.Ch <- "该名称已存在,请尝试其他名称!"
+		return
+	}
+	delete(u.server.OnlineUsers, u.Name)
+	u.Name = newName
+	u.server.OnlineUsers[u.Name] = u
 }

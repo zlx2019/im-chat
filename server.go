@@ -19,7 +19,7 @@ type Server struct {
 	// 锁
 	Lock sync.RWMutex
 	// 消息广播器,所有的消息都从这里广播出去
-	Publisher chan string
+	Publisher chan *Message
 }
 
 // 创建服务端
@@ -29,7 +29,7 @@ func NewServer(ip string, port int) *Server {
 		IP:          ip,
 		Port:        port,
 		OnlineUsers: make(map[string]*User),
-		Publisher:   make(chan string, 10),
+		Publisher:   make(chan *Message, 10),
 	}
 }
 
@@ -80,27 +80,34 @@ func (s *Server) Handler(conn net.Conn) {
 }
 
 // 将消息推送给广播器
-func (s *Server) Pushlish(user *User, msg string) {
-	if user == nil {
-		s.Publisher <- msg
-	} else {
-		s.Publisher <- fmt.Sprintf("[%s]: %s", user.Name, msg)
-	}
+func (s *Server) Pushlish(msg *Message) {
+	s.Publisher <- msg
 }
 
 // 消息监听,并且广播给所有在线用户
 func (s *Server) Listener() {
 	for {
-		message, ok := <-s.Publisher
+		m, ok := <-s.Publisher
 		if !ok {
 			// 广播器已经关闭
 			return
 		}
+
 		// 广播消息
-		// s.Lock.RLock()
 		for _, u := range s.OnlineUsers {
-			u.Ch <- message
+			if m.Type == Public {
+				// 公开消息,排除掉发送者本身
+				if u.Name == m.User.Name {
+					continue
+				}
+				u.Ch <- fmt.Sprintf("[%s]: %s", m.User.Name, m.Payload)
+			} else if m.Type == Private {
+				// 私信消息
+				// TODO
+			} else if m.Type == Admin {
+				// 系统消息
+				log.Println(m.Payload)
+			}
 		}
-		// s.Lock.RUnlock()
 	}
 }
