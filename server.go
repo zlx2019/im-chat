@@ -115,19 +115,16 @@ func (s *Server) Listener() {
 		// 系统消息
 		if m.Type == Admin {
 			log.Printf("[%s] %s", m.User.Name, m.Payload)
-		}
-
-		// 广播用户消息
-		for _, u := range s.OnlineUsers {
-			if m.Type == Public {
-				// 公开消息,排除掉发送者本身
-				if u.Name == m.User.Name {
-					continue
+		} else {
+			// 广播公开消息
+			for _, u := range s.OnlineUsers {
+				if m.Type == Public {
+					// 公开消息,排除掉发送者本身
+					if u.Name == m.User.Name {
+						continue
+					}
+					u.Ch <- fmt.Sprintf("[%s]: %s", m.User.Name, m.Payload)
 				}
-				u.Ch <- fmt.Sprintf("[%s]: %s", m.User.Name, m.Payload)
-			} else if m.Type == Private {
-				// 私信消息
-				// TODO
 			}
 		}
 	}

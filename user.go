@@ -89,6 +89,11 @@ func (u *User) Reader() {
 
 		// 读取消息并且,解析
 		data := string(buf[:n-1])
+		// 判空
+		if strings.TrimSpace(data) == "" {
+			continue
+		}
+
 		message := OfMessage(u, data).Parse()
 		switch message.Type {
 		case Private:
