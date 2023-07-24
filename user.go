@@ -60,10 +60,9 @@ func (u *User) Writer() {
 			u.conn.Write([]byte(msg + "\r\n"))
 		case <-u.StopCtx.Done():
 			// 接收到Reader协程 停止信号,关闭本协程
-			// 关闭用户的消息通道
 			close(u.Ch)
 			log.Println("当前协程数量: ", runtime.NumGoroutine()-1)
-			return
+			Quit()
 		}
 	}
 }
@@ -76,30 +75,46 @@ func (u *User) Reader() {
 		// 读取消息
 		n, err := u.conn.Read(buf)
 		if err != nil {
+			// 判断客户端是否已经关闭,或者用户已经超时被动关闭
 			if err == io.EOF {
 				// 客户端主动关闭,用户下线
 				u.Downline()
-				return
 			} else if opErr, ok := err.(*net.OpError); ok && opErr.Err.Error() == "use of closed network connection" {
 				// conn已被close,可能已经超时强制退出.直接结束该协程
-				return
+				Quit()
 			}
 			log.Println("client read error:", err)
 			continue
 		}
-		// 读取数据成功(去除 '\n')
-		message := string(buf[:n-1])
-		// 是否是操作命令
-		if message == "ls" {
-			// 查看所有在线用户
-			message = u.OnlineUsers()
-			u.Ch <- message
-		} else if len(message) > 7 && message[:7] == "rename " {
-			// 重命名
-			u.Rename(message[7:])
-		} else {
-			// 将消息转发给服务端
-			u.server.Pushlish(OfMessage(u, message, Public))
+
+		// 读取消息并且,解析
+		data := string(buf[:n-1])
+		message := OfMessage(u, data).Parse()
+		switch message.Type {
+		case Private:
+			// 私聊消息
+			// 获取目标用户
+			targetUser, ok := u.server.OnlineUsers[message.Target]
+			if !ok {
+				// 目标用户不存在
+				u.Ch <- "您私聊的用户不存在!"
+				continue
+			}
+			// 向目标用户 发现私信
+			targetUser.Ch <- fmt.Sprintf("[%s]: %s", u.Name, message.Payload)
+		case Public, Admin:
+			// 公开消息 或者 操作命令
+			m := message.Payload
+			if m == "ls" {
+				// 查看所有在线用户信息
+				u.Ch <- u.OnlineUsers()
+			} else if len(m) > 7 && m[:7] == "rename " {
+				// 用户重命名
+				u.Rename(m[7:])
+			} else {
+				// 公开消息,直接发送给服务端
+				u.server.Pushlish(message)
+			}
 		}
 		// 发送心跳信号,保持活跃 否则会超时
 		u.Active <- struct{}{}
@@ -114,8 +129,9 @@ func (u *User) Online() {
 	u.server.OnlineUsers[u.Name] = u
 	u.server.Lock.Unlock()
 	// 广播上线消息
-	u.server.Pushlish(OfMessage(u, "上线辣~", Public))
-	u.server.Pushlish(OfMessage(u, "上线了~", Admin))
+	message := NewMessage(u, "上线辣~", Public)
+	u.server.Pushlish(message)
+	u.server.Pushlish(message.Clone(Admin))
 	// 开启一个协程 读取服务端消息,并且写回客户端
 	go u.Writer()
 	// 开启一个协程 读取客户端消息,发送给服务端广播器
@@ -135,10 +151,14 @@ func (u *User) Downline() {
 	u.StopCancel()
 
 	//3. 广播下线消息
-	u.server.Pushlish(OfMessage(u, "下线辣~", Public))
-	u.server.Pushlish(OfMessage(u, "下线了~", Admin))
+	message := NewMessage(u, "下线辣~", Public)
+	u.server.Pushlish(message)
+	u.server.Pushlish(message.Clone(Admin))
 	//4. 关闭客户端连接
 	u.conn.Close()
+
+	// 5. 退出当前协程
+	Quit()
 }
 
 // find all online users
@@ -176,4 +196,9 @@ func (u *User) Rename(newName string) {
 	delete(u.server.OnlineUsers, u.Name)
 	u.Name = newName
 	u.server.OnlineUsers[u.Name] = u
+}
+
+// 结束当前协程
+func Quit() {
+	runtime.Goexit()
 }
