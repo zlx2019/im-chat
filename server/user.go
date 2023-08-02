@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -198,9 +198,18 @@ func (u *User) Rename(newName string) {
 		u.Ch <- "该名称已存在,请尝试其他名称!"
 		return
 	}
+	oldName := u.Name
+
+	// 从在线列表移除
 	delete(u.server.OnlineUsers, u.Name)
 	u.Name = newName
 	u.server.OnlineUsers[u.Name] = u
+	u.Ch <- "重新命名成功!"
+
+	// 广播重命名信息
+	u.server.Pushlish(NewMessage(u, fmt.Sprintf("我从[%s]更名为[%s]辣!", oldName, newName), Public))
+	u.server.Pushlish(NewMessage(nil, fmt.Sprintf("[%s]已更名为[%s]", oldName, newName), Admin))
+
 }
 
 // 结束当前协程

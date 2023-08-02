@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"fmt"
@@ -87,10 +87,10 @@ func (s *Server) Handler(conn net.Conn) {
 		case <-user.StopCtx.Done():
 			// 主动退出
 			Quit()
-		case <-time.After(time.Second * 60 * 2):
+		case <-time.After(time.Second * 60 * 3):
 			// 超时被动退出
-			// 一旦用户超过10秒没有收到心跳信号,超时强制下线
-			user.conn.Write([]byte("已超时,您被强制下线了~"))
+			// 一旦用户超过180秒没有收到心跳信号,超时强制下线
+			user.conn.Write([]byte("已超时,您被强制下线了~ \n"))
 			s.Pushlish(NewMessage(user, "已超时,强制下线~", Admin))
 			// 用户下线
 			user.Downline()
@@ -114,7 +114,8 @@ func (s *Server) Listener() {
 		}
 		// 系统消息
 		if m.Type == Admin {
-			log.Printf("[%s] %s", m.User.Name, m.Payload)
+			//log.Printf("[%s] %s", m.User.Name, m.Payload)
+			log.Println(m.Payload)
 		} else {
 			// 广播公开消息
 			for _, u := range s.OnlineUsers {
